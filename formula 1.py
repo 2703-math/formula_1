@@ -42,8 +42,8 @@ def carregar_eventos(ano):
     # Filtra apenas eventos que não são testes de pré-temporada
     eventos = schedule[schedule['EventFormat'] != 'testing']['EventName'].tolist()
     return eventos
-
-@st.cache_data
+    
+@st.cache_resource   # <--- MUDE APENAS ESTA LINHA
 def carregar_sessao(ano, corrida, sessao_tipo):
     session = fastf1.get_session(ano, corrida, sessao_tipo)
     session.load(telemetry=True, laps=True, weather=False)
