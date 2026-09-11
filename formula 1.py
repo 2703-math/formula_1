@@ -32,73 +32,37 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-
-    .stApp {
-        background-color: #f8fafc;
-    }
-
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-
-    .main-title {
-        font-size: 2.2rem;
-        font-weight: 800;
-        color: #0f172a;
-        text-align: center;
-        margin-bottom: 0.2rem;
-        letter-spacing: -0.5px;
-    }
-    
-    .subtitle {
-        font-size: 1.05rem;
-        color: #64748b;
-        text-align: center;
-        margin-bottom: 2rem;
-        font-weight: 400;
-    }
-
-    .dashboard-card {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 14px;
-        padding: 1.5rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px -1px rgba(0, 0, 0, 0.02);
-        margin-bottom: 1.2rem;
-    }
-
-    .card-header {
-        font-size: 1.05rem;
-        font-weight: 700;
-        color: #1e293b;
-        margin-bottom: 1rem;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        border-bottom: 1px solid #f1f5f9;
-        padding-bottom: 0.6rem;
-    }
+    .stApp {background-color: #f8fafc;}
+    .block-container {padding-top: 2rem; padding-bottom: 2rem;}
+    .main-title {font-size: 2.2rem; font-weight: 800; color: #0f172a; text-align: center; margin-bottom: 0.2rem; letter-spacing: -0.5px;}
+    .subtitle {font-size: 1.05rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 400;}
+    .dashboard-card {background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02); margin-bottom: 1.2rem;}
+    .card-header {font-size: 1.05rem; font-weight: 700; color: #1e293b; margin-bottom: 1.0rem; border-bottom: 1px solid #f1f5f9; padding-bottom: 0.6rem;}
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================
-# FUNÇÕES DE CARREGAMENTO COM CACHE DE RECURSOS
+# FUNÇÕES DE CARREGAMENTO BLINDADAS
 # ============================================
 @st.cache_data(ttl=86400)
 def carregar_eventos(ano):
-    schedule = fastf1.get_event_schedule(ano)
-    eventos = schedule[schedule['EventFormat'] != 'testing']['EventName'].tolist()
-    return eventos
+    try:
+        schedule = fastf1.get_event_schedule(ano)
+        eventos = schedule[schedule['EventFormat'] != 'testing']['EventName'].tolist()
+        return eventos
+    except Exception:
+        return []
 
 @st.cache_resource
 def carregar_sessao(ano, corrida, sessao_tipo):
     try:
         session = fastf1.get_session(ano, corrida, sessao_tipo)
+        # Força o carregamento completo de telemetria, voltas e meteorologia
         session.load(telemetry=True, laps=True, weather=True)
         
+        # Validação de segurança: se as voltas vierem vazias, força um recarregamento manual
         if session.laps is None or len(session.laps) == 0:
-            session.load_laps()
+            session.load_laps(with_telemetry=True)
             
         return session, None
     except Exception as e:
@@ -110,7 +74,6 @@ def carregar_sessao(ano, corrida, sessao_tipo):
 st.markdown('<div class="main-title">🏎️ Central de Telemetria F1</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Análise de Dados Avançada e Comparação de Pilotos (Estilo MoTeC)</div>', unsafe_allow_html=True)
 
-# Container de Configuração
 with st.container():
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.markdown('<div class="card-header">⚙️ Configuração do Grand Prix</div>', unsafe_allow_html=True)
@@ -120,6 +83,9 @@ with st.container():
         ano = st.selectbox("Ano", list(range(2026, 2017, -1)))
     with col2:
         eventos_disponiveis = carregar_eventos(ano)
+        if not eventos_disponiveis:
+            st.error("Erro ao carregar o calendário deste ano. Tente outro ano.")
+            st.stop()
         corrida = st.selectbox("Corrida", eventos_disponiveis)
     with col3:
         sessao_tipo = st.selectbox("Sessão", ["FP1", "FP2", "FP3", "Q", "S", "SQ", "R"], 
@@ -132,20 +98,19 @@ with st.container():
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Lógica de Execução da Sessão
+# Gerenciamento de Estado da Sessão
 if carregar_btn or 'session' in st.session_state:
     if carregar_btn:
-        with st.spinner('Conectando aos servidores da FIA e processando telemetria...'):
+        with st.spinner('Conectando aos servidores da F1 e baixando pacotes de dados...'):
             session, erro = carregar_sessao(ano, corrida, sessao_tipo)
             if erro:
-                st.error(f"Erro ao carregar sessão: {erro}")
+                st.error(f"Falha crítica ao carregar a sessão: {erro}")
                 st.stop()
             else:
                 st.session_state['session'] = session
     else:
         session = st.session_state['session']
 
-    # Abas do Dashboard
     tab1, tab2, tab3 = st.tabs(["  📊 Resultados Gerais  ", "  📈 Telemetria MoTeC  ", "  💡 Sugestões de Análise  "])
 
     # ABA 1: RESULTADOS GERAIS
@@ -154,11 +119,14 @@ if carregar_btn or 'session' in st.session_state:
         st.markdown(f'<div class="card-header">Classificação Oficial - {corrida} ({ano})</div>', unsafe_allow_html=True)
         
         try:
-            df_results = session.results[['Position', 'DriverNumber', 'BroadcastName', 'Abbreviation', 'TeamName', 'Time', 'Status', 'Points']].copy()
-            df_results.columns = ['Pos', 'Nº', 'Piloto', 'Sigla', 'Equipe', 'Tempo/Delta', 'Status', 'Pontos']
-            st.dataframe(df_results, use_container_width=True, hide_index=True)
+            if hasattr(session, 'results') and not session.results.empty:
+                df_results = session.results[['Position', 'DriverNumber', 'BroadcastName', 'Abbreviation', 'TeamName', 'Time', 'Status', 'Points']].copy()
+                df_results.columns = ['Pos', 'Nº', 'Piloto', 'Sigla', 'Equipe', 'Tempo/Delta', 'Status', 'Pontos']
+                st.dataframe(df_results, use_container_width=True, hide_index=True)
+            else:
+                st.warning("Os dados de resultados oficiais ainda não foram publicados para esta sessão.")
         except Exception as e:
-            st.warning("Resultados ainda não disponíveis para esta sessão.")
+            st.error(f"Erro ao exibir tabela de resultados: {e}")
             
         st.markdown('</div>', unsafe_allow_html=True)
 
